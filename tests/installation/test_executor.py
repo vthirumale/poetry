@@ -909,7 +909,9 @@ Package operations: 1 install, 0 updates, 0 removals
     assert mock_pip_install.call_args[1].get("editable") is False
 
 
+@pytest.mark.parametrize("failing_method", ["build", "get_requires_for_build"])
 def test_build_backend_errors_are_reported_correctly_if_caused_by_subprocess(
+    failing_method: str,
     mocker: MockerFixture,
     config: Config,
     pool: RepositoryPool,
@@ -923,14 +925,16 @@ def test_build_backend_errors_are_reported_correctly_if_caused_by_subprocess(
     error = BuildBackendException(
         CalledProcessError(1, ["pip"], output=b"Error on stdout")
     )
-    mocker.patch.object(ProjectBuilder, "build", side_effect=error)
+    mocker.patch.object(ProjectBuilder, failing_method, side_effect=error)
     io.set_verbosity(Verbosity.NORMAL)
 
     executor = Executor(env, pool, config, io)
 
+    package_name = "simple-project"
+    package_version = "1.2.3"
     directory_package = Package(
-        "simple-project",
-        "1.2.3",
+        package_name,
+        package_version,
         source_type="directory",
         source_url=Path(__file__)
         .parent.parent.joinpath("fixtures/simple_project")
@@ -946,14 +950,28 @@ def test_build_backend_errors_are_reported_correctly_if_caused_by_subprocess(
 
     assert return_code == 1
 
-    expected = f"""
+    package_url = directory_package.source_url
+    expected_start = f"""
 Package operations: 1 install, 0 updates, 0 removals
 
-  • Installing simple-project (1.2.3 {directory_package.source_url})
+  • Installing {package_name} ({package_version} {package_url})
 
   ChefBuildError
+
+  Backend operation failed: CalledProcessError(1, ['pip'])
+  \
 
   Error on stdout
 """
 
-    assert io.fetch_output().startswith(expected)
+    requirement = directory_package.to_dependency().to_pep_508()
+    expected_end = f"""
+Note: This error originates from the build backend, and is likely not a problem with \
+poetry but with {package_name} ({package_version} {package_url}) not supporting \
+PEP 517 builds. You can verify this by running 'pip wheel --use-pep517 "{requirement}"'.
+
+"""
+
+    output = io.fetch_output()
+    assert output.startswith(expected_start)
+    assert output.endswith(expected_end)
